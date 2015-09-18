@@ -1,19 +1,6 @@
 #!/usr/bin/env python
 
-### Printing script for map tiles.
-###
-### original by John D. Morgan
-###   June 2, 2014
-###   You will need to install to following lib to parse the json:
-###     	sudo yum install python-simplejson
-###   To-do: make the temporary image file names based on date-time stamp and
-###   when script runs clean out any old ones (e.g. a day old)
-###
-### Tue May 26 20:55:29 2015
-###    Modified by mbp to work as a general OpenLayers map print service, rather
-###    than specifically for FCAV.
-
-import cgi, simplejson, sys, urllib, os, time, shutil, uuid
+import cgi, simplejson, sys, urllib, os, time, shutil, uuid, re
 import PIL.Image, PIL.ImageChops, PIL.ImageDraw, PIL.ImageFont
 
 fontsize = 17  # starting font size
@@ -31,9 +18,7 @@ uid = str(uuid.uuid4())
 job_tmp_dir = os.path.join(TEMP_DIR, uid)
 os.mkdir(job_tmp_dir)
 
-# Open log file
 log = open(os.path.join(job_tmp_dir, "print.log"), "wb")
-log.write( "Opening print log!!\n");
 params = cgi.FieldStorage();
 log.write("FieldStorage>>\n");
 for k in params.keys():
@@ -47,103 +32,101 @@ for f in os.listdir(TEMP_DIR):
                 if now - os.stat(path).st_mtime > TEMP_DELETE_SECONDS:
                         shutil.rmtree(path)
 
+settings = {}
+settings['width']   = int( params.getvalue("width") )
+settings['height']  = int( params.getvalue("height") )
+settings['tiles']   = simplejson.loads( params.getvalue("tiles") )
+settings['image']   = bool(int( params.getvalue("image",0) ))
+settings['legends'] = simplejson.loads( params.getvalue("legends") )
+settings['title']   = params.getvalue("title")
 
-try:
-	settings = {}
-	settings['width']   = int( params.getvalue("width") )
-	settings['height']  = int( params.getvalue("height") )
-	settings['tiles']   = simplejson.loads( params.getvalue("tiles") )
-	settings['image']   = bool(int( params.getvalue("image",0) ))
-	settings['legends'] = simplejson.loads( params.getvalue("legends") )
-	settings['title']   = params.getvalue("title")
-	imgXList = [] 
-	imgYList = []
-	log.write("got here\n")
-	#1. read in the x and y coordinates
-	for tile in settings['tiles']:
-		# log.write(str(tile)+"\n")
-		for key, val in tile.iteritems():
-			if (str(key)=='x'):
-				imgXList.append(val)
-			if (str(key)=='y'):
-				imgYList.append(val)		
-	log.write("min x:"+str(min(imgXList))+"\n")
-	log.write("min y:"+str(min(imgYList))+"\n")
-	#3. create new canvas and past onto it
-	printCount = 0
-	imgX = 0 
-	imgY = 0
-	new_im = PIL.Image.new('RGB', (settings['width']+256,settings['height']+256))
-	background = PIL.Image.new('RGBA', (1440,900), (255, 255, 255, 255))
-	#4. Get all of the map tiles and assemble them accordingly
-	log.write("width:"+str(settings['width']+256)+"height:"+str(settings['height']+256)+"\n")
-	for tile in settings['tiles']:
-                tmpimg = os.path.join(job_tmp_dir, str(printCount)+".jpg")
-		log.write(str(tile)+"\n")
-		for key, val in tile.iteritems():
-			if (str(key)=='url'):
-				urllib.urlretrieve(str(val), tmpimg)
-			if (str(key)=='x'):
-				imgX = str(val+abs(min(imgXList)))
-				log.write("new x:"+str(imgX)+"\n")
-			if (str(key)=='y'):
-				imgY = str(val+abs(min(imgYList)))
-				log.write("new y:"+str(imgY)+"\n")
-		im = PIL.Image.open(tmpimg)
-		log.write("bbox:"+str(im.getbbox())+"\n")
-		# log.write(str(im.getcolors())+"\n")
-		# log.write(str(im.mode)+"\n")
-		if im.mode == 'RGBA':
-			if im.getbbox() is not None:
-				new_im.paste(im, (int(imgX),int(imgY)), im)
-				log.write("rgba\n")
-		else:
-			if im.getbbox() is not None:
-				new_im.paste(im, (int(imgX),int(imgY)))
-				log.write("not rgba\n")
-		printCount = printCount+1	
-	#2. Download the legends and assemble them accordingly
-	legendCount = 0
-	legends_palette = PIL.Image.new('RGBA', (400,800), (255, 255, 255, 255))
-	legend_y = 0
-	for legend in settings['legends']:
-                tmpimg = os.path.join(job_tmp_dir, "legend-"+str(legendCount)+".jpg")
-		log.write("legend: "+str(legend)+"\n")	
-		for key, val in legend.iteritems():
-			if (str(key)=='url'):
-				urllib.urlretrieve(str(val), tmpimg)
-		legend_im = PIL.Image.open(tmpimg)
-		# legend_im.thumbnail((100,100), PIL.Image.ANTIALIAS)
-		legends_palette.paste(legend_im, (0,legend_y))
-		legendCount = legendCount+1
-		lgd_w,lgd_h=legend_im.size
-		legend_y = legend_y+lgd_h
-	#6. resize map
-	new_im.thumbnail((1100,700), PIL.Image.ANTIALIAS)
-	#7. save completed map on to white background
-	img_w,img_h=new_im.size
-	bg_w,bg_h=background.size
-	offset=(20,(bg_h-img_h)/2) 
-	# offset=((bg_w-img_w)/2,(bg_h-img_h)/2)
-	background.paste(new_im,offset)
-	background.paste(legends_palette,(img_w+30,(bg_h-img_h)/2))
-	#3. Add title, date printed to background
-	draw = PIL.ImageDraw.Draw(background)
-	draw.text((20,(bg_h-img_h)/2-25), settings['title'], fill="black", font=fontBold)
-	draw.text((20,(bg_h-(bg_h-img_h)/2)), "Printed on: "+time.strftime("%m/%d/%Y"), fill="black", font=font)	
-	log.write("got here\n")
-        output_img = os.path.join(job_tmp_dir, uid+".jpg")
-	background.save(output_img)
-	# new_im.save("printed_map.jpg")	
-	#8. Clean up after yourself:
-	#dirPath = "print_temp"
-	# fileList = os.listdir(dirPath)
-	# for fileName in fileList:
-		# os.remove(dirPath+"/"+fileName)	
-        print "Content-type: text/plain\n\n"
-        print output_img + "\n"
-except:
-	log.write("error occured\n")
+def fix_transparency(im, opacity):
+    # first fix any RGB image with a special "transparent" color, by converting
+    # it to RGBA and setting the alpha channel in the RGBA image to 0 any place
+    # where the transparent color appears:
+    if im.mode == 'RGB' and 'transparency' in im.info:
+        tr_color = im.info['transparency']
+        im = im.convert("RGBA")
+        pixdata = im.load()
+        for y in xrange(im.size[1]):
+            for x in xrange(im.size[0]):
+                if pixdata[x, y][0:3] == tr_color:
+                    pixdata[x, y] = (0, 0, 0, 0)
+    # Now make sure image is RGBA:
+    if im.mode != 'RGBA':
+            im = im.convert('RGBA')
+    # And finally, apply global transparency by setting alpha channel
+    # according to the specified opacity, except where alpha was already
+    # set to 0 above:
+    if opacity < 100:
+        alpha = int(255.0 * opacity / 100.0)
+        pixdata = im.load()
+        for y in xrange(im.size[1]):
+            for x in xrange(im.size[0]):
+                if pixdata[x, y][3] != 0:
+                    pixdata[x, y] = pixdata[x, y][0:3] + (alpha,)
+    return im
 
-# Close log file
+imgXList = [tile['x'] for tile in settings['tiles']]
+imgYList = [tile['y'] for tile in settings['tiles']]
+
+minImgX = abs(min(imgXList))
+minImgY = abs(min(imgYList))
+
+# Download all the tiles, saving them in the job_tmp_dir, and storing
+# the saved path in the tile dict.  (Each tile is a dict with keys
+# "url", "x", "y", "opacity", and we add a "tmpimg" key here.)
+imgNo = 0
+for tile in settings['tiles']:
+        tile["tmpimg"] = os.path.join(job_tmp_dir, str(imgNo)+".jpg")
+        urllib.urlretrieve(tile["url"], tile["tmpimg"])
+        imgNo += 1
+
+# Now paint each one into a new image, at the corresponding (x,y) location:
+new_im = PIL.Image.new('RGB', (settings['width']+256,settings['height']+256))
+for tile in settings['tiles']:
+        imgX = tile["x"]+minImgX
+        imgY = tile["y"]+minImgY
+	im = PIL.Image.open(tile["tmpimg"])
+        if im.getbbox() is not None:
+                im = fix_transparency(im, tile["opacity"])
+                new_im.paste(im, (imgX,imgY), im)
+
+# Download the legends
+imgNo = 0
+for legend in settings['legends']:
+        legend["tmpimg"] = os.path.join(job_tmp_dir, "legend-"+str(imgNo)+".jpg")
+        urllib.urlretrieve(legend["url"], legend["tmpimg"])
+        imgNo += 1
+
+# Assemble the legends
+legends_palette = PIL.Image.new('RGBA', (400,800), (255, 255, 255, 255))
+legend_y = 0
+for legend in settings['legends']:
+	legend_im = PIL.Image.open(legend["tmpimg"])
+	legends_palette.paste(legend_im, (0,legend_y))
+	lgd_w,lgd_h = legend_im.size
+	legend_y += lgd_h
+
+# resize the image to be at most 1100 x 700:
+new_im.thumbnail((1100,700), PIL.Image.ANTIALIAS)
+
+# save completed map on white background
+background = PIL.Image.new('RGBA', (1440,900), (255, 255, 255, 255))
+img_w,img_h = new_im.size
+bg_w,bg_h = background.size
+offset= (20,(bg_h-img_h)/2) 
+# offset=((bg_w-img_w)/2,(bg_h-img_h)/2)
+background.paste(new_im,offset)
+background.paste(legends_palette,(img_w+30,(bg_h-img_h)/2))
+#3. Add title, date printed to background
+draw = PIL.ImageDraw.Draw(background)
+draw.text((20,(bg_h-img_h)/2-25), settings['title'], fill="black", font=fontBold)
+draw.text((20,(bg_h-(bg_h-img_h)/2)), "Printed on: "+time.strftime("%m/%d/%Y"), fill="black", font=font)	
+output_img = os.path.join(job_tmp_dir, uid+".jpg")
+background.save(output_img)
+
+print "Content-type: text/plain\n\n"
+print output_img + "\n"
+
 log.close()
